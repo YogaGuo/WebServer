@@ -1,5 +1,5 @@
-#ifndef HHTP_CONN_H
-#define HHTP_CONN_H
+#ifndef HTTP_CONN_H
+#define HTTP_CONN_H
 #include <unistd.h>
 #include <signal.h>
 #include <sys/epoll.h>
@@ -9,7 +9,11 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <string.h>
+#include <syslog.h>
+#include <sys/stat.h>
 #include "../locker.h"
+
 class http_conn
 {
 public:
@@ -50,7 +54,7 @@ public:
         BAD_REQUEST,
         NO_RESOURCE,
         FORBIDDEN_REQUEST,
-        FILE_REQUEST,
+        FILE_REQUEST, //请求资源可以正常反应
         INTERNAL_ERROR,
         CLOSED_CONNECTION
     };
@@ -65,7 +69,7 @@ public:
     void close_conn(bool real_closer = true);
     void process();
     /*读取浏览器发来的全部数据*/
-    bool real_once();
+    bool read_once();
     /*响应报文写入*/
     bool write();
     sockaddr_in *get_address()
@@ -84,10 +88,7 @@ private:
     HTTP_CODE parse_request_line(char *text);
     HTTP_CODE parse_header(char *text);
     HTTP_CODE parse_content(char *text);
-    char *get_line()
-    {
-        return m_read_buf + m_start_count;
-    }
+    char *get_line();
     HTTP_CODE do_request();
     LINE_STATUE parse_line();
 
@@ -132,7 +133,7 @@ private:
     char m_real_file[FILE_NAME_LEN];
     char *m_url;
     char *m_version;
-    char *host;
+    char *m_host;
     int m_content_length;
     bool m_linger;
 
@@ -147,5 +148,5 @@ private:
     char *m_string;      //存储请求头数据
     int bytes_to_send;   //剩余发送字节数
     int bytes_done_send; //已发送字节数
-}
+};
 #endif
