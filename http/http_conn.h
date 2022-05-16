@@ -1,6 +1,8 @@
 #ifndef HTTP_CONN_H
 #define HTTP_CONN_H
 #include <unistd.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -10,6 +12,8 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <string.h>
+#include <map>
+#include <sys/uio.h>
 #include <syslog.h>
 #include <sys/stat.h>
 #include "../locker.h"
@@ -65,7 +69,9 @@ public:
 
 public:
     // 初始化socket地址，
-    void init(int sockfd, const struct sockaddr_in &addr);
+    void init(int sockfd, const sockaddr_in &addr, char *, int, int,
+              const std::string &user, const std::string &passwd, const std::string &sqlname);
+
     void close_conn(bool real_closer = true);
     void process();
     /*读取浏览器发来的全部数据*/
@@ -108,6 +114,9 @@ public:
     static int m_user_count;
     MYSQL *mysql;
 
+    int timer_flag;
+    int improv;
+    int m_state; //读为0, 写为1
 private:
     int m_sockfd;
     struct sockaddr_in m_address;
@@ -122,7 +131,7 @@ private:
     int m_start_line;
 
     char m_write_buf[WRITE_BUF_SIZE];
-    /*待发送字节数*/
+    /*指示buf中的长度*/
     int m_write_size;
 
     /*主状态机当前状态*/
@@ -148,5 +157,13 @@ private:
     char *m_string;      //存储请求头数据
     int bytes_to_send;   //剩余发送字节数
     int bytes_done_send; //已发送字节数
+
+    std::map<std::string, std::string> m_users;
+    int m_TRIGMode;
+    int m_close_log;
+
+    char sql_user[100];
+    char sql_passwd[100];
+    char sql_name[100];
 };
 #endif

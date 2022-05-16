@@ -1,6 +1,16 @@
 #include "http_conn.h"
 #include <mysql/mysql.h>
 
+const char *ok_200_title = "OK";
+const char *error_400_title = "Bad Request";
+const char *error_400_form = "Your request has bad syntax or is inherently impossible to staisfy.\n";
+const char *error_403_title = "Forbidden";
+const char *error_403_form = "You do not have permission to get file form this server.\n";
+const char *error_404_title = "Not Found";
+const char *error_404_form = "The requested file was not found on this server.\n";
+const char *error_500_title = "Internal Error";
+const char *error_500_form = "There was an unusual problem serving the request file.\n";
+
 bool http_conn::read_once()
 {
     if (m_read_next_idx >= READ_BUF_SIZE)
@@ -64,6 +74,53 @@ void modfd(int epollfd, int fd, int ev, int TRIGMode)
     else
         events.events = ev | EPOLLONESHOT | EPOLLRDHUP;
     epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &events);
+}
+
+void http_conn::init()
+{
+    mysql = NULL;
+    bytes_to_send = 0;
+    bytes_done_send = 0;
+    m_check_state = CHECH_STATE_REQUESTLINE;
+    m_linger = false;
+    m_method = GET;
+    m_url = 0;
+    m_version = 0;
+    m_content_length = 0;
+    m_host = 0;
+    m_start_line = 0;
+    m_check_idx = 0;
+    m_read_next_idx = 0;
+    m_write_size = 0;
+    cgi = 0;
+    m_state = 0;
+    timer_flag = 0;
+    improv = 0;
+
+    memset(m_read_buf, '\0', READ_BUF_SIZE);
+    memset(m_write_buf, '\0', WRITE_BUF_SIZE);
+    memset(m_real_file, '\0', FILE_NAME_LEN);
+}
+
+void http_conn::init(int sockfd, const sockaddr_in &addr, char *root, int TRIGMode,
+                     int close_log, const std::string &user, const std::string &passwd,
+                     const std::string &sqlname)
+{
+    m_sockfd = sockfd;
+    m_address = addr;
+
+    addfd(m_epollfd, sockfd, true, m_TRIGMode);
+    m_user_count++;
+
+    doc_root = root;
+    m_TRIGMode = TRIGMode;
+    m_close_log = close_log;
+
+    strcpy(sql_user, user.c_str());
+    strcpy(sql_passwd, passwd.c_str());
+    strcpy(sql_name, sqlname.c_str());
+
+    init();
 }
 
 http_conn::LINE_STATUE http_conn::parse_line()
@@ -262,7 +319,7 @@ http_conn::HTTP_CODE http_conn::parse_content(char *text)
     return NO_REQUEST;
 }
 
-const char *doc_root = "/home/Yogaguo/Webserver/root";
+const char *doc_root = "/home/Linux_server_programing/WebServer";
 http_conn::HTTP_CODE http_conn::do_request()
 {
     strcpy(m_real_file, doc_root);
@@ -336,4 +393,210 @@ http_conn::HTTP_CODE http_conn::do_request()
     m_file_address = (char *)mmap(NULL, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     return FILE_REQUEST;
+}
+
+bool http_conn::add_response(const char *format, ...)
+{
+    if (m_write_size >= WRITE_BUF_SIZE)
+    {
+        return false;
+    }
+    va_list arg_list;
+    va_start(arg_list, format);
+    int len = vsnprintf(m_write_buf + m_write_size, WRITE_BUF_SIZE - m_write_size,
+                        format, arg_list);
+    if (len >= (WRITE_BUF_SIZE - m_write_size - 1))
+        va_end(arg_list);
+    return false;
+
+    m_write_size += len;
+    va_end(arg_list);
+
+    return true;
+}
+
+/*添加状态行*/
+bool http_conn::add_status_line(int status, const char *title)
+{
+    return add_response("%s %d %s\r\n", "HTTP/1.1", status, title);
+}
+
+/*添加消息报头， 具体为： 文本长度， 连接状态， 空行*/
+bool http_conn::add_headers(int content_len)
+{
+    add_content_length(content_len);
+    add_linger();
+    add_blank_line();
+}
+
+bool http_conn::add_content_length(int content_len)
+{
+    return add_response("Content-Length: %d\r\n", content_len);
+}
+
+bool http_conn::add_linger()
+{
+    return add_response("Connection: %s\r\n", (m_linger == true) ? "keep-alive" : close);
+}
+
+bool http_conn::add_blank_line()
+{
+    return add_response("%s", "\r\n");
+}
+/**/
+bool http_conn::add_content_type()
+{
+    return add_response("Content_Type: %s\r\n", "text/html");
+}
+
+bool http_conn::add_content(const char *content)
+{
+    return add_response("%s", content);
+}
+
+void http_conn::process()
+{
+    HTTP_CODE read_ret = process_read();
+    if (read_ret == NO_REQUEST)
+    {
+        modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+        return;
+    }
+    bool write_ret = process_write(read_ret);
+    if (!write_ret)
+    {
+        close_conn();
+    }
+    modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+}
+
+bool http_conn::process_write(HTTP_CODE ret)
+{
+    switch (ret)
+    {
+        /*内部错误*/
+    case INTERNAL_ERROR:
+        add_status_line(500, error_500_title);
+        add_headers(strlen(error_500_form));
+        if (!add_content(error_500_form))
+            return false;
+        break;
+        /*报文语法有误： 404*/
+    case BAD_REQUEST:
+        add_status_line(404, error_404_title);
+        add_headers(strlen(error_404_form));
+        if (!add_content(error_404_form))
+            return false;
+        break;
+    /*资源没有访问权限 403*/
+    case FORBIDDEN_REQUEST:
+        add_status_line(403, error_403_title);
+        add_headers(strlen(error_403_form));
+        if (add_content(error_403_form))
+            return false;
+        break;
+    /*文件存在， 200*/
+    case FILE_REQUEST:
+        add_status_line(200, ok_200_title);
+
+        if (m_file_stat.st_size != 0)
+        {
+            add_headers(m_file_stat.st_size);
+            m_iv[0].iov_base = m_write_buf;
+            m_iv[0].iov_len = m_write_size;
+
+            m_iv[1].iov_base = m_file_address;
+            m_iv[1].iov_len = m_file_stat.st_size;
+            m_iv_count = 2;
+            /*发送的全部数据为响应报文头部信息 和 文件大小*/
+            bytes_to_send = m_write_size + m_file_stat.st_size;
+            return true;
+        }
+        else
+        {
+            /*请求资源大小为0 返回空白html文件*/
+            const char *ok_string = "<html><body></body></html>";
+            add_headers(strlen(ok_string));
+            if (!add_content(ok_string))
+                return false;
+        }
+    default:
+        return false;
+        break;
+    }
+    m_iv[0].iov_base = m_write_buf;
+    m_iv[0].iov_len = m_write_size;
+    m_iv_count = 1;
+    return true;
+}
+
+bool http_conn::write()
+{
+    int temp = 0;
+    int newaddr = 0;
+
+    if (bytes_to_send == 0)
+    {
+        modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+        init();
+        return true;
+    }
+    while (1)
+    {
+        temp = writev(m_sockfd, m_iv, m_iv_count);
+        if (temp > 0)
+        {
+            /*更新已发送字节*/
+            bytes_done_send += temp;
+            /*偏移文件iovec指针*/
+            newaddr = bytes_done_send - m_write_size;
+        }
+        if (temp <= -1)
+        {
+            /*判断缓冲区是否满了*/
+            if (errno == EAGAIN)
+            {
+                /*第一个iovec头部信息数据已近满了 发送第二个iovec数据*/
+                if (bytes_done_send >= m_iv[0].iov_len)
+                {
+                    m_iv[0].iov_len = 0;
+                    m_iv[1].iov_base = m_file_address + newaddr;
+                    m_iv[1].iov_len = bytes_to_send;
+                }
+                /*继续发送第一个iovec头部信息*/
+                else
+                {
+                    m_iv[0].iov_base = m_write_buf + bytes_done_send;
+                    m_iv[0].iov_len = m_iv[0].iov_len - bytes_done_send;
+                }
+                modfd(m_epollfd, m_sockfd, EPOLLOUT, m_TRIGMode);
+                return true;
+            }
+            /*如果发送失败 但不是缓冲区的问题 取消映射*/
+            umap();
+            return false;
+        }
+
+        bytes_to_send -= temp;
+
+        /*所有数据已经全部发送完毕*/
+        if (!bytes_to_send <= 0)
+        {
+            umap();
+            /*重置epolloneshot*/
+            modfd(m_epollfd, m_sockfd, EPOLLIN, m_TRIGMode);
+
+            /*浏览器请求为长连接*/
+            if (m_linger)
+            {
+                /*重新初始化http对象*/
+                init();
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+    }
 }

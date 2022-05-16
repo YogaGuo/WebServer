@@ -10,11 +10,14 @@ template <typename T>
 class thread_pool
 {
 public:
-    thread_pool(int thread_number = 8, int max_request = 1000);
+    thread_pool(int actor_model, connection_pool *connPool,
+                int thread_number = 8, int max_request = 1000);
     ~thread_pool();
 
     /*往请求队列添加任务*/
-    bool append(T *request);
+    bool append(T *request, int);
+
+    bool append_p(T *request);
 
 private:
     /*线程池中的线程数*/
@@ -43,8 +46,8 @@ private:
 };
 
 template <typename T>
-thread_pool<T>::thread_pool(int thread_number, int max_request) : m_thread_number(thread_number), m_max_request(max_request),
-                                                                  m_stop(false), m_threads(nullptr)
+thread_pool<T>::thread_pool(int actor_model, connection_pool *connPool, int thread_number, int max_request)
+    : m_thread_number(thread_number), m_max_request(max_request), m_stop(false), m_threads(nullptr)
 {
     if ((thread_number <= 0) || (max_request <= 0))
     {
@@ -80,7 +83,7 @@ thread_pool<T>::~thread_pool()
 }
 
 template <typename T>
-bool thread_pool<T>::append(T *request)
+bool thread_pool<T>::append(T *request, int state)
 {
     m_queuelocker.lock();
     if (m_workqueue.size() > m_max_request)
@@ -92,6 +95,30 @@ bool thread_pool<T>::append(T *request)
     m_queuelocker.unlock();
     m_queuestat.post();
     return true;
+}
+
+/*传入的是fd*/
+template <typename T>
+bool thread_pool<T>::append_p(T *request)
+{
+    m_queuelocker.lock();
+    if (m_workqueue.size() > m_max_request)
+    {
+        m_queuelocker.unlock();
+        return false;
+    }
+    m_workqueue.push_back(request);
+    m_queuelocker.unlock();
+    m_queuestat.post();
+    return true;
+}
+
+template <typename T>
+void *thread_pool<T>::work(void *arg)
+{
+    thread_pool<T> *pool = (thread_pool *)arg;
+    pool->run();
+    return pool;
 }
 
 template <typename T>
