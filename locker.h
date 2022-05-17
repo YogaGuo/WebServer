@@ -1,3 +1,11 @@
+/*
+ * @Description:
+ * @Version: 2.0
+ * @Autor: Yogaguo
+ * @Date: 2022-05-07 20:30:36
+ * @LastEditors: Yogaguo
+ * @LastEditTime: 2022-05-17 11:57:41
+ */
 #ifndef _LOCKER__H
 #define _KOCKER__H
 
@@ -64,37 +72,34 @@ class cond
 public:
     cond()
     {
-        if (pthread_mutex_init(&m_mutex, nullptr) != 0)
+        if (pthread_cond_init(&m_cond, NULL) != 0)
         {
-            throw std::exception();
-        }
-        if (pthread_cond_init(&m_cond, nullptr) != 0)
-        {
-            pthread_mutex_destroy(&m_mutex);
             throw std::exception();
         }
     }
 
     ~cond()
     {
-        pthread_mutex_destroy(&m_mutex);
         pthread_cond_destroy(&m_cond);
     }
-    bool wait()
+
+    bool wait(pthread_mutex_t *m_mutex)
     {
         int ret = 0;
-        pthread_mutex_lock(&m_mutex);
-        ret = pthread_cond_wait(&m_cond, &m_mutex);
-        pthread_mutex_unlock(&m_mutex);
+        ret = pthread_cond_wait(&m_cond, m_mutex);
+
         return ret == 0;
     }
     bool signal()
     {
         return pthread_cond_signal(&m_cond) == 0;
     }
+    bool broadcast()
+    {
+        return pthread_cond_broadcast(&m_cond) == 0;
+    }
 
 private:
     pthread_cond_t m_cond;
-    pthread_mutex_t m_mutex;
 };
 #endif
