@@ -4,7 +4,7 @@
  * @Autor: Yogaguo
  * @Date: 2022-05-07 20:30:36
  * @LastEditors: Yogaguo
- * @LastEditTime: 2022-05-17 11:57:41
+ * @LastEditTime: 2022-05-17 12:32:10
  */
 #ifndef _LOCKER__H
 #define _KOCKER__H
@@ -61,6 +61,10 @@ public:
     bool unlock()
     {
         return pthread_mutex_unlock(&m_mutex) == 0;
+    }
+    pthread_mutex_t *get()
+    {
+        return &m_mutex;
     }
 
 private:
